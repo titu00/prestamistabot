@@ -112,7 +112,7 @@ var taxonomyKeys = {
 			'cuit': ['cuit','c.u.i.t.'],
 			'telefono': ['tel','telefono','fono','numero'],
 			'email': ['email','mail','correo','correo electronico','direccion'],
-			'nombre': ['nombre','llamo'],
+			'nombre': ['nombre','llamo','llaman','soy'],
 		},
 		'intent_balance': {
 			'resultados': ['resultados','ganancias','resultados netos','patrimonio'],
@@ -129,6 +129,42 @@ var taxonomyKeys = {
 		}
 	};
 
+// Limpia el plazo, retorna un moment.duration
+var limpiarPlazo = function(valor) {
+	valor = 'P'+valor
+		.toLowerCase()
+		.replace(' y ','')
+		.replace(/[\s]+/g,'')
+		.replace(/[^a-z0-9]/g,'')
+		.replace(/([^\d])[^\d]+/g,'$1')
+		.replace('a','y')
+		.replace('s','w')
+		.replace(/^[^0-9]+/g,'')
+		.replace(/[0-9]+$/g,'')
+		.toUpperCase();
+	return moment.duration(valor);
+};
+
+// Limpia el monto, retorna un numerico
+var limpiarMonto = function(valor) {
+	var num = numeral().unformat(valor);
+	valor = ' '+valor.toLowerCase()+' ';
+	var unidades = {
+			'cien':100,
+			'cientos':100,
+			'mil':1000,
+			'miles':1000,
+			'millones':1000000,
+			'millon':1000000,
+		};
+	for(unit in unidades) {
+		if( valor.match( new RegExp(' '+unit+' ') ) ) {
+			num *= unidades[unit];
+		}
+	}
+	return num;
+};
+
 var saveData = function(session,args,next) {
 
 	console.log(" Intent: %s %d% ".white.bgMagenta, args.intent, Math.round(args.score*100) );
@@ -136,18 +172,18 @@ var saveData = function(session,args,next) {
 	// Obtiene concepto/valor pendiente o actual
 	var foundConcept = builder.EntityRecognizer.findEntity( args.entities, 'concept' );
 	if(!foundConcept) {
-		foundConcept = session.userData.pending_concept;
+		foundConcept = session.userData._pending_concept;
 	}
-	session.userData.pending_concept = false;
+	session.userData._pending_concept = false;
 	var foundValue = builder.EntityRecognizer.findEntity( args.entities, 'value' );
 	if(!foundValue) {
-		foundValue = session.userData.pending_value;
+		foundValue = session.userData._pending_value;
 	}
-	session.userData.pending_value = false;
+	session.userData._pending_value = false;
 
 	// Obtiene el intent anterior
-	if(args.intent == 'None' && session.userData.pending_intent) {
-		args.intent = session.userData.pending_intent;
+	if(args.intent == 'None' && session.userData._pending_intent) {
+		args.intent = session.userData._pending_intent;
 	}
 
 	if(args.intent && taxonomyKeys[args.intent]) {
@@ -161,7 +197,22 @@ var saveData = function(session,args,next) {
 							session.userData[args.intent] = {};
 						}
 						// TODO: Aca debe haber alguna limpieza de los datos, pero depende del tipo de datos...
-						session.userData[args.intent][key] = foundValue.entity;
+						switch(key) {
+							case 'monto':
+							case 'ingresos':
+							case 'egresos':
+							case 'resultados':
+							case 'patrimonio':
+							case 'cuota':
+								session.userData[args.intent][key] = limpiarMonto(foundValue.entity);
+								break;
+							case 'plazo':
+								session.userData[args.intent][key] = limpiarPlazo(foundValue.entity);
+								break;
+							default:
+								session.userData[args.intent][key] = foundValue.entity;
+								break;
+						}
 						break;
 					}
 				}
@@ -169,105 +220,19 @@ var saveData = function(session,args,next) {
 		} else {
 			if(foundConcept) {
 				session.send('Disculpa, no comprendi el valor de '+foundConcept.entity);
-				session.userData.pending_intent = args.intent;
-				session.userData.pending_concept = foundConcept;
+				session.userData._pending_intent = args.intent;
+				session.userData._pending_concept = foundConcept;
 				return;
 			} else if(foundValue) {
 				session.send('Disculpa, no entendi a que corresponde el valor '+foundValue.entity);
-				session.userData.pending_intent = args.intent;
-				session.userData.pending_value = foundValue;
+				session.userData._pending_intent = args.intent;
+				session.userData._pending_value = foundValue;
 				return;
 			}
 		} 
 	}
 	next(session,args,next);
 };
-
-/*
-// Guarda y procesa los datos
-var middleProc = function(session,args,next) {
-	var keys = ['nombre','proposito','correo','monto','telefono','plazo'];
-	for(key of keys) {
-		var tmp = builder.EntityRecognizer.findEntity(args.entities, key);
-		// TODO: Usar findBestMatch https://docs.botframework.com/en-us/node/builder/chat/IntentDialog/#navtitle
-		if(tmp) {
-			session.userData[key] = tmp.entity;
-		}
-	}
-	console.log(" Intent: %s %d% ".white.bgRed, args.intent, Math.round(args.score*100) );
-	console.log(" -- Session data start -- ".blue);
-	console.log(session.userData);
-	console.log(" -- Session data end -- ".blue);
-	next(session,args,next);
-};
-
-
-// Calcula el plazo
-var calcPlazo = function(plazo) {
-	// Viene dirty
-	var parts = plazo.split(' ');
-	var unit = 'days';
-	switch(parts[1]) {
-		case 'dias':
-		case 'dia':
-			// TODO: Do not touch? or set unit false and return unrecognized
-			break;
-		case 'meses':
-		case 'mes':
-			unit = 'months';
-			break;
-		case 'anios':
-		case 'anio':
-		case 'anos':
-		case 'ano':
-			unit = 'years';
-			break;
-	}
-	return moment.duration(parseInt(parts[0]),unit);
-}
-
-// Calcula el prestamo 
-var calcPrestamo = function(plazo, monto, tasa) {
-	var plazo_clean = calcPlazo(plazo);
-	var monto_clean = numeral().unformat(monto);
-	var res = {
-		plazo: plazo_clean.asDays(),
-		monto: monto_clean
-	};
-	// TODO: Levantar el interes de API
-	res.tasa = 0.2;
-	res.cuota_cant = Math.ceil( res.plazo / 30);
-	// TODO: Sistema frances, etc.
-	res.cuota_valor = ( res.monto * (1+res.tasa) ) / res.cuota_cant;
-	return	res;
-};
-
-
-// Imprime el prestam
-var imprimePrestamo = function(session,results) {
-	var prestamo = calcPrestamo(session.userData.plazo, session.userData.monto );
-	if(session.userData.nombre) {
-		session.send(
-			"%s, para tu prestamo de %s a %d dias, te quedan %d cuotas de %.2f con un TNA %.2f",
-			session.userData.nombre,
-			prestamo.monto,
-			prestamo.plazo,
-			prestamo.cuota_cant,
-			prestamo.cuota_valor,
-			prestamo.tasa*100
-		);
-	} else {
-		session.send(
-			"Para tu prestamo de %s a %d dias, te quedan %d cuotas de %.2f con un TNA %.2f",
-			prestamo.monto,
-			prestamo.plazo,
-			prestamo.cuota_cant,
-			prestamo.cuota_valor,
-			prestamo.tasa*100
-		);
-	}
-};
-*/
 
 
 /**
@@ -298,7 +263,11 @@ intents.matches('intent_balance',[
 intents.matches('intent_datos',[
 	saveData,
 	function(session,args,next) {
-		session.send('Entiendo que me estas pasando tus datos');
+		if(!session.userData.saludado && session.userData.nombre) {
+			session.send('Hola %s',session.userData.nombre);
+		} else {
+			session.send('Registrado');
+		}
 	}
 ]);
 
@@ -310,10 +279,12 @@ intents.matches('debug',[
 	function(session,args,next) {
 		var enviado = false;
 		for(mode in session.userData) {
-			var vars = session.userData[mode];
-			for(k in vars) {
-				enviado = true;
-				session.send('DEBUG: '+mode+' '+k+' => '+session.userData[mode][k]);
+			if(!mode.match(/^_/)) {
+				var vars = session.userData[mode];
+				for(k in vars) {
+					enviado = true;
+					session.send('DEBUG: '+mode+' '+k+' => '+session.userData[mode][k]);
+				}
 			}
 		}
 		if(!enviado) {
@@ -331,6 +302,7 @@ intents.matches('intent_saludo',[
 		var max = respuestas.intent_saludo.length;
 		var rand = Math.floor( Math.random() * max );
 		session.send( respuestas.intent_saludo[rand] );
+		session.userData._saludado = true;
 	}
 ]);
 
@@ -340,64 +312,55 @@ intents.matches('intent_saludo',[
  */
 intents.matches('intent_humano',[
 	function(session,args,next) {
-		var max = respuestas.intent_saludo.length;
-		var rand = Math.floor( Math.random() * max );
-		session.send( respuestas.intent_humano[rand] );
-	}
-]);
-
-/*
-intents.matches('saludo_intent', [
-	middleProc,
-    function (session, args, next) {
-		session.send("Hola%s, soy tu asistente virtual para préstamos",session.userData.nombe? ' '+session.userData.nombre:'');
-		// TODO: No guardar plazo/monto, sino que permitir guardar varios
-		// TODO: Procesar el plazo antes de escupir
-    }
-]);
-
-intents.matches('intent_prestamo',[
-	middleProc,
-	function(session,args,next) {
-		if(
-			!session.userData.monto
-			||
-			!session.userData.plazo
-			) {
-			var str = "Puedo ayudarte con eso, pero necesito:";
-			if(!session.userData.monto)
-				str+= "\n- Monto";
-			if(!session.userData.plazo)
-				str+= "\n- Plazo";
-			session.send(str);
+		builder.Prompts.text(session, respuestas.intent_humano[Math.floor(Math.random()*respuestas.intent_humano.length)]);
+		if(!session.userData.intent_datos.nombre) {
+			builder.Prompts.text(session, respuestas.intent_datos.nombre[Math.floor(Math.random()*respuestas.intent_datos.nombre.length)]);
 		} else {
-			next({
-				monto: session.userData.monto,
-				plazo: session.userData.plazo
-			});
+			next({response: session.userData.intent_datos.nombre});
 		}
 	},
-	imprimePrestamo
-]);
-intents.matches('intent_contacto',[
-	middleProc,
-	function(session,args,next) {
-		console.log(args);
-		session.send('Queres que te contacte');
+	function(session,results,next) {
+		session.userData.intent_datos.nombre = results.response;
+		if(
+			session.userData.intent_datos.telefono && session.userData.intent_datos.email ||
+			!session.userData.intent_datos.telefono && !session.userData.intent_datos.email
+			) {
+			builder.Prompts.text(session, "Como podemos contactarte? (telefono/email)");
+		} else if(session.userData.intent_datos.telefono) {
+			next({response: 'telefono'});
+		} else if(session.userData.intent_datos.email) {
+			next({response: 'email'});
+		}
+	},
+	function(session,results,next) {
+		if(results.response.toLowerCase().match('tel')) {
+			session.userData._contact = 'telefono';
+		} else if(results.response.toLowerCase().match(/(mail|corr)/)) {
+			session.userData._contact = 'email';
+		} else {
+			session.send('No reconozco el medio');
+			// TODO: Loop?
+			return;
+		}
+		if( !session.userData.intent_datos[session.userData._contact] ) {
+			builder.Prompts.text(session, 'Nos puedes pasar un '+session.userData._contact+' para contactarte?');
+		} else {
+			next({response: session.userData.intent_datos[session.userData._contact]});
+		}
+	},
+	function(session,results,next) {
+		session.userData.intent_datos[session.userData._contact] = results.response;
+		session.send('%s, brevemente se estaran contactando contigo al %s',
+			session.userData.intent_datos.nombre,
+			results.response
+			);
 	}
 ]);
-intents.matches('intent_terminos',[
-	middleProc,
-	function(session,args,next) {
-		next({
-			monto: session.userData.monto,
-			plazo: session.userData.plazo
-		});
-	},
-	imprimePrestamo
-]);
-*/
 
+
+/**
+ * Default (None)
+ */
 intents.onDefault([
 	saveData,
 	function(session,args,next) {
