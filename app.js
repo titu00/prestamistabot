@@ -1,8 +1,6 @@
-// Microsoft
+// Requires
 var restify = require('restify');
 var builder = require('botbuilder');
-
-// Utilidades
 var colors = require('colors');
 var numeral = require('numeral');
 var moment = require('moment');
@@ -24,18 +22,168 @@ server.post('/api/messages', connector.listen());
 
 // Dialogs
 // TODO: Pasar a una var
-var recognizer = new builder.LuisRecognizer('https://api.projectoxford.ai/luis/v1/application?id=90f6d036-f6e9-45ca-ad29-1384eb731b31&subscription-key=b577b9b73d7c4ac89affaa1f08af1ff8');
+var recognizer = new builder.LuisRecognizer(
+		'https://api.projectoxford.ai/luis/v1/application?id=4b828775-9a0d-4416-b7ba-117eab8007ab&subscription-key=b577b9b73d7c4ac89affaa1f08af1ff8'
+	);
 var intents = new builder.IntentDialog({ recognizers: [recognizer] });
 bot.dialog('/', intents);
 
 
-/*
 // Corre al empezar
 intents.onBegin(function (session, args, next) {
+//	session.send('Hola');
     next();
 });
-*/
 
+
+var respuestas = {
+		'intent_datos': {
+			'razon': [
+				'Estaria necesitando la razon social',
+				'Necesito la razon social',
+			],
+			'cuit': [
+				'Necesito el CUIT',
+			],
+			'telefono': [
+				'Cual es su telefono?',
+			],
+			'email': [
+				'Me puede pasar su correo electronico?'
+			],
+			'nombre': [
+				'Como puedo llamarle?'
+			]
+		},
+		'intent_balance': {
+			'periodo': [
+				'Cual es tu ultimo periodo',
+				'De que anio estamos hablando?',
+			],
+			'resultados': [
+				'Cuales fueron tus resultados netos del ultimo periodo?',
+			],
+			'ingresos': [
+				'Cuales fueron los ingresos?',
+				'Que monto de ventas manejaron?',
+			],
+			'egresos': [
+				'Cuantos fueron los gastos?',
+				'De cuanto fueron los egresos?',
+			],
+			'patrimonio': [
+				'Cuanto es el patrimonio de la empresa?',
+			]
+		},
+		'intent_prestamo': {
+			'monto': [
+				'Cual es el monto deseado del prestamo?',
+				'Cuanto necesitas de prestamo?',
+			],
+			'plazo': [
+				'Por cuanto tiempo?',
+				'Por cuantos dias?',
+				'En cuanto tiempo quieres pagarlo?',
+			],
+			'cuota': [
+				'De cuanto deseas que sea tu cuota?',
+			],
+			'tasa': [
+				'Que tasa estas buscando?',
+			],
+		},
+		'intent_humano': [
+			'Disculpa que no sea de tu agrado, te transfiero con mi supervisor humano',
+			'Te estoy pasando con una persona real',
+		],
+		'intent_saludo': [
+			'Hola, soy una asistente virtual para prestamos. En que te puedo ayudar hoy?',
+			'Hola, soy tu asistente virtual para prestamos, como puedo ayudarte hoy?',
+			'Hola, estoy para ayudarte a obtener un prestamo',
+		],
+		'None': [
+			'Disculpa, pero no te entiendo',
+			"Puedes probar decirme 'Quiero un prestamo de ... a ... dias'",
+		]
+	};
+var taxonomyKeys = {
+		'intent_datos': {
+			'razon': ['razon','razon social','empresa'],
+			'cuit': ['cuit','c.u.i.t.'],
+			'telefono': ['tel','telefono','fono','numero'],
+			'email': ['email','mail','correo','correo electronico','direccion'],
+			'nombre': ['nombre','llamo'],
+		},
+		'intent_balance': {
+			'resultados': ['resultados','ganancias','resultados netos','patrimonio'],
+			'periodo': ['periodo','periodo fiscal'],
+			'ingresos': ['ingresos','ventas','facturacion','facturamos','facture','factura','vendimos'],
+			'egresos': ['egresos','gastos'],
+			'patrimonio': ['patrimonio','patromonio neto','patrimonio positivo','patrimonio negativo'],
+		},
+		'intent_prestamo': {
+			'monto': ['monto','valor','prestamo'],
+			'plazo': ['plazo','duracion'],
+			'cuota': ['cuota','mensual','mensualmente'],
+			'tasa': ['tasa','tna','interes']
+		}
+	};
+
+var saveData = function(session,args,next) {
+
+	console.log(" Intent: %s %d% ".white.bgMagenta, args.intent, Math.round(args.score*100) );
+
+	// Obtiene concepto/valor pendiente o actual
+	var foundConcept = builder.EntityRecognizer.findEntity( args.entities, 'concept' );
+	if(!foundConcept) {
+		foundConcept = session.userData.pending_concept;
+	}
+	session.userData.pending_concept = false;
+	var foundValue = builder.EntityRecognizer.findEntity( args.entities, 'value' );
+	if(!foundValue) {
+		foundValue = session.userData.pending_value;
+	}
+	session.userData.pending_value = false;
+
+	// Obtiene el intent anterior
+	if(args.intent == 'None' && session.userData.pending_intent) {
+		args.intent = session.userData.pending_intent;
+	}
+
+	if(args.intent && taxonomyKeys[args.intent]) {
+		if(foundConcept && foundValue) {
+			// TODO: Manejar cuando no encuentra el valor
+			for(key in taxonomyKeys[args.intent]) {
+				var concepts = taxonomyKeys[args.intent][key];
+				for(concept of concepts) {
+					if(foundConcept.entity.toLowerCase() == concept) {
+						if(typeof session.userData[args.intent] == 'undefined') {
+							session.userData[args.intent] = {};
+						}
+						// TODO: Aca debe haber alguna limpieza de los datos, pero depende del tipo de datos...
+						session.userData[args.intent][key] = foundValue.entity;
+						break;
+					}
+				}
+			}
+		} else {
+			if(foundConcept) {
+				session.send('Disculpa, no comprendi el valor de '+foundConcept.entity);
+				session.userData.pending_intent = args.intent;
+				session.userData.pending_concept = foundConcept;
+				return;
+			} else if(foundValue) {
+				session.send('Disculpa, no entendi a que corresponde el valor '+foundValue.entity);
+				session.userData.pending_intent = args.intent;
+				session.userData.pending_value = foundValue;
+				return;
+			}
+		} 
+	}
+	next(session,args,next);
+};
+
+/*
 // Guarda y procesa los datos
 var middleProc = function(session,args,next) {
 	var keys = ['nombre','proposito','correo','monto','telefono','plazo'];
@@ -119,6 +267,7 @@ var imprimePrestamo = function(session,results) {
 		);
 	}
 };
+*/
 
 
 /**
@@ -127,8 +276,10 @@ var imprimePrestamo = function(session,results) {
 intents.matches('intent_prestamo',[
 	saveData,
 	function(session,args,next) {
+		session.send('Entiendo que quieres un prestamo');
 	}
 ]);
+
 
 /**
  * Carga los datos de un balance
@@ -136,8 +287,10 @@ intents.matches('intent_prestamo',[
 intents.matches('intent_balance',[
 	saveData,
 	function(session,args,next) {
+		session.send('Entiendo que me estas pasando los datos del balance');
 	}
 ]);
+
 
 /**
  * Carga los datos de la empresa/usuario
@@ -145,10 +298,55 @@ intents.matches('intent_balance',[
 intents.matches('intent_datos',[
 	saveData,
 	function(session,args,next) {
+		session.send('Entiendo que me estas pasando tus datos');
 	}
 ]);
 
 
+/**
+ * Retorna los datos que tiene guardados
+ */
+intents.matches('debug',[
+	function(session,args,next) {
+		var enviado = false;
+		for(mode in session.userData) {
+			var vars = session.userData[mode];
+			for(k in vars) {
+				enviado = true;
+				session.send('DEBUG: '+mode+' '+k+' => '+session.userData[mode][k]);
+			}
+		}
+		if(!enviado) {
+			session.send('DEBUG: Esta sesion no tiene datos');
+		}
+	}
+]);
+
+
+/** 
+ * Saludo
+ */
+intents.matches('intent_saludo',[
+	function(session,args,next) {
+		var max = respuestas.intent_saludo.length;
+		var rand = Math.floor( Math.random() * max );
+		session.send( respuestas.intent_saludo[rand] );
+	}
+]);
+
+
+/**
+ * El usuario se quiere contactar con un humano
+ */
+intents.matches('intent_humano',[
+	function(session,args,next) {
+		var max = respuestas.intent_saludo.length;
+		var rand = Math.floor( Math.random() * max );
+		session.send( respuestas.intent_humano[rand] );
+	}
+]);
+
+/*
 intents.matches('saludo_intent', [
 	middleProc,
     function (session, args, next) {
@@ -198,13 +396,14 @@ intents.matches('intent_terminos',[
 	},
 	imprimePrestamo
 ]);
+*/
 
 intents.onDefault([
-	middleProc,
+	saveData,
 	function(session,args,next) {
-		// console.log(args);
-		// TODO: Levantar los matches para ofrecer
-		session.send('Disculpa, pero no te entiendo');
+		for(resp of respuestas.None) {
+			session.send(resp);
+		}
 	}
 ]);
 
