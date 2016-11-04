@@ -31,6 +31,12 @@ bot.dialog('/', intents);
 
 // Corre al empezar
 intents.onBegin(function (session, args, next) {
+	if(!session.userData.intent_datos)
+		session.userData.intent_datos = {};
+	if(!session.userData.intent_balance)
+		session.userData.intent_balance = {};
+	if(!session.userData.intent_prestamo)
+		session.userData.intent_prestamo = {};
 //	session.send('Hola');
     next();
 });
@@ -39,8 +45,8 @@ intents.onBegin(function (session, args, next) {
 var respuestas = {
 		'intent_datos': {
 			'razon': [
-				'Estaria necesitando la razon social',
-				'Necesito la razon social',
+				'Puedo consultar su razon social?',
+				'Su razon social?',
 			],
 			'cuit': [
 				'Necesito el CUIT',
@@ -129,6 +135,12 @@ var taxonomyKeys = {
 		}
 	};
 
+// Limpia el nombre
+var limpiarNombre = function(valor) {
+	var valor = ' '+valor;
+	return valor.replace(/[\s]([a-z])/g,function(a,b) { return a.replace(b,b.toUpperCase()); }).trim();
+}
+
 // Limpia el plazo, retorna un moment.duration
 var limpiarPlazo = function(valor) {
 	valor = 'P'+valor
@@ -184,6 +196,7 @@ var saveData = function(session,args,next) {
 	// Obtiene el intent anterior
 	if(args.intent == 'None' && session.userData._pending_intent) {
 		args.intent = session.userData._pending_intent;
+		session.userData._pending_intent = null;
 	}
 
 	if(args.intent && taxonomyKeys[args.intent]) {
@@ -198,6 +211,10 @@ var saveData = function(session,args,next) {
 						}
 						// TODO: Aca debe haber alguna limpieza de los datos, pero depende del tipo de datos...
 						switch(key) {
+							case 'nombre':
+							case 'razon':
+								session.userData[args.intent][key] = limpiarNombre(foundValue.entity);
+								break;
 							case 'monto':
 							case 'ingresos':
 							case 'egresos':
@@ -219,18 +236,20 @@ var saveData = function(session,args,next) {
 			}
 		} else {
 			if(foundConcept) {
-				session.send('Disculpa, no comprendi el valor de '+foundConcept.entity);
+				
+				session.send('Disculpa, no comprendi el valor de '+foundConcept.entity ? foundConcept.entity : foundConcept);
 				session.userData._pending_intent = args.intent;
 				session.userData._pending_concept = foundConcept;
 				return;
 			} else if(foundValue) {
-				session.send('Disculpa, no entendi a que corresponde el valor '+foundValue.entity);
+				session.send('Disculpa, no entendi a que corresponde el valor '+foundValue.entity ? foundValue.entity : foundValue);
 				session.userData._pending_intent = args.intent;
 				session.userData._pending_value = foundValue;
 				return;
 			}
 		} 
 	}
+
 	next(session,args,next);
 };
 
@@ -263,12 +282,38 @@ intents.matches('intent_balance',[
 intents.matches('intent_datos',[
 	saveData,
 	function(session,args,next) {
-		if(!session.userData.saludado && session.userData.nombre) {
-			session.send('Hola %s',session.userData.nombre);
+		if(!session.userData._saludado && session.userData.intent_datos.nombre) {
+			session.send('Hola %s',session.userData.intent_datos.nombre);
 		} else {
-			session.send('Registrado');
+			session.send('Anotado.');
 		}
-	}
+		if(!session.userData.intent_datos.razon) {
+			builder.Prompts.text( session,
+				 respuestas.intent_datos.razon[Math.floor(Math.random()*respuestas.intent_datos.razon.length)]);
+		} else {
+			next({response: session.userData.intent_datos.razon});
+		}
+	},
+	function(session,results,next) {
+		if(!session.userData.intent_datos.razon) {
+			session.userData.intent_datos.razon = results.response;
+		}
+		if(!session.userData.intent_datos.cuit) {
+			builder.Prompts.text( session,
+				respuestas.intent_datos.cuit[Math.floor(Math.random()*respuestas.intent_datos.cuit.length)]);
+			return;
+		} else {
+			next({response: session.userData.intent_datos.cuit});
+		}
+	},
+	function(session,results,next) {
+		if(!session.userData.intent_datos.cuit) {
+			session.userData.intent_datos.cuit = results.response;
+		}
+		session.send(
+			"Estoy listo para cotizarte un prestamo, prueba consultarme 'Quiero un prestamo de ...'"
+			);
+	},
 ]);
 
 
@@ -282,8 +327,10 @@ intents.matches('debug',[
 			if(!mode.match(/^_/)) {
 				var vars = session.userData[mode];
 				for(k in vars) {
-					enviado = true;
-					session.send('DEBUG: '+mode+' '+k+' => '+session.userData[mode][k]);
+					if(taxonomyKeys[mode] && taxonomyKeys[mode][k]) {
+						enviado = true;
+						session.send('DEBUG: '+mode+' '+k+' => '+session.userData[mode][k]);
+					}
 				}
 			}
 		}
@@ -312,20 +359,23 @@ intents.matches('intent_saludo',[
  */
 intents.matches('intent_humano',[
 	function(session,args,next) {
+		// TODO: no repetir
 		builder.Prompts.text(session, respuestas.intent_humano[Math.floor(Math.random()*respuestas.intent_humano.length)]);
 		if(!session.userData.intent_datos.nombre) {
-			builder.Prompts.text(session, respuestas.intent_datos.nombre[Math.floor(Math.random()*respuestas.intent_datos.nombre.length)]);
+			builder.Prompts.text( session,
+				respuestas.intent_datos.nombre[Math.floor(Math.random()*respuestas.intent_datos.nombre.length)]);
 		} else {
 			next({response: session.userData.intent_datos.nombre});
 		}
 	},
 	function(session,results,next) {
+
 		session.userData.intent_datos.nombre = results.response;
 		if(
 			session.userData.intent_datos.telefono && session.userData.intent_datos.email ||
 			!session.userData.intent_datos.telefono && !session.userData.intent_datos.email
 			) {
-			builder.Prompts.text(session, "Como podemos contactarte? (telefono/email)");
+			builder.Prompts.text(session, "Como podemos contactarte? Telefono o email?");
 		} else if(session.userData.intent_datos.telefono) {
 			next({response: 'telefono'});
 		} else if(session.userData.intent_datos.email) {
@@ -343,7 +393,10 @@ intents.matches('intent_humano',[
 			return;
 		}
 		if( !session.userData.intent_datos[session.userData._contact] ) {
-			builder.Prompts.text(session, 'Nos puedes pasar un '+session.userData._contact+' para contactarte?');
+			// builder.Prompts.text(session, 'Nos puedes pasar un '+session.userData._contact+' para contactarte?');
+			builder.Prompts.text( session,
+				respuestas.intent_datos[session.userData._contact][Math.floor(Math.random()*respuestas.intent_datos[session.userData._contact].length)]);
+			return;
 		} else {
 			next({response: session.userData.intent_datos[session.userData._contact]});
 		}
