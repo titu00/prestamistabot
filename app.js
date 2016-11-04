@@ -23,7 +23,7 @@ server.post('/api/messages', connector.listen());
 // Dialogs
 // TODO: Pasar a una var
 var recognizer = new builder.LuisRecognizer(
-		'https://api.projectoxford.ai/luis/v1/application?id=4b828775-9a0d-4416-b7ba-117eab8007ab&subscription-key=b577b9b73d7c4ac89affaa1f08af1ff8'
+		process.env.LUISURI
 	);
 var intents = new builder.IntentDialog({ recognizers: [recognizer] });
 bot.dialog('/', intents);
@@ -260,7 +260,11 @@ var saveData = function(session,args,next) {
 intents.matches('intent_prestamo',[
 	saveData,
 	function(session,args,next) {
-		session.send('Entiendo que quieres un prestamo');
+		if(!session.userData.intent_balance.resultados ||
+			!session.userData.intent_balance.periodo) {
+			session.send('Necesito me pase los datos de su ultimo balance como periodo fiscal y resultados');
+			return;
+		}
 	}
 ]);
 
@@ -271,7 +275,36 @@ intents.matches('intent_prestamo',[
 intents.matches('intent_balance',[
 	saveData,
 	function(session,args,next) {
-		session.send('Entiendo que me estas pasando los datos del balance');
+		if(!session.userData.intent_balance.periodo) {
+			builder.Prompts.text( session,
+				 respuestas.intent_balance.periodo[Math.floor(Math.random()*respuestas.intent_balance.periodo.length)]);
+		} else {
+			next({response: session.userData.intent_balance.periodo});
+		}
+	},
+	function(session,results) {
+		if(!session.userData.intent_balance.periodo) {
+			session.userData.intent_balance.periodo = results.response;
+		}
+		if(!session.userData.intent_balance.resultados) {
+			if(session.userData.intent_balance.ingresos && session.userData.intent_balance.egresos) {
+				session.userData.intent_balance.resultados = 
+					Math.abs( session.userData.intent_balance.ingresos ) -
+					Math.abs( session.userData.intent_balance.egresos );
+			}
+			builder.Prompts.text( session,
+				 respuestas.intent_balance.resultados[Math.floor(Math.random()*respuestas.intent_balance.resultados.length)]);
+		} else {
+			next({response: session.userData.intent_balance.resultados});
+		}
+	},
+	function(session,results) {
+		if(!session.userData.intent_balance.resultados) {
+			session.userData.intent_balance.resultados = results.response;
+		}
+		session.send(
+			"Estoy listo para cotizarte un prestamo, prueba consultarme 'Quiero un prestamo de ...'"
+			);
 	}
 ]);
 
@@ -284,6 +317,7 @@ intents.matches('intent_datos',[
 	function(session,args,next) {
 		if(!session.userData._saludado && session.userData.intent_datos.nombre) {
 			session.send('Hola %s',session.userData.intent_datos.nombre);
+			session.userData._saludado = true;
 		} else {
 			session.send('Anotado.');
 		}
@@ -299,7 +333,7 @@ intents.matches('intent_datos',[
 			session.userData.intent_datos.razon = results.response;
 		}
 		if(!session.userData.intent_datos.cuit) {
-			builder.Prompts.text( session,
+			builder.Prompts.number( session,
 				respuestas.intent_datos.cuit[Math.floor(Math.random()*respuestas.intent_datos.cuit.length)]);
 			return;
 		} else {
@@ -393,7 +427,6 @@ intents.matches('intent_humano',[
 			return;
 		}
 		if( !session.userData.intent_datos[session.userData._contact] ) {
-			// builder.Prompts.text(session, 'Nos puedes pasar un '+session.userData._contact+' para contactarte?');
 			builder.Prompts.text( session,
 				respuestas.intent_datos[session.userData._contact][Math.floor(Math.random()*respuestas.intent_datos[session.userData._contact].length)]);
 			return;
